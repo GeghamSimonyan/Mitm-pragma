@@ -1,0 +1,120 @@
+# MITM Proxy Configuration for Game Launcher
+# Controls URL rewrites, analytics blocking, and proxy behavior
+
+proxy:
+  host: "0.0.0.0"
+  port: 8080
+  ssl_insecure: false
+  upstream: null  # Set to "http://upstream-proxy:port" if chaining proxies
+
+# Analytics domains/patterns to block entirely (return 204 No Content)
+analytics_block:
+  domains:
+    - "google-analytics.com"
+    - "googletagmanager.com"
+    - "analytics.google.com"
+    - "firebase.io"
+    - "firebaseio.com"
+    - "firebaseapp.com"
+    - "crashlytics.com"
+    - "fabric.io"
+    - "amplitude.com"
+    - "api.amplitude.com"
+    - "api2.amplitude.com"
+    - "mixpanel.com"
+    - "api.mixpanel.com"
+    - "segment.com"
+    - "api.segment.io"
+    - "cdn.segment.com"
+    - "sentry.io"
+    - "ingest.sentry.io"
+    - "datadog-hq.com"
+    - "datadoghq.com"
+    - "newrelic.com"
+    - "collector.newrelic.com"
+    - "bam.nr-data.net"
+    - "stats.g.doubleclick.net"
+    - "pagead2.googlesyndication.com"
+    - "adservice.google.com"
+    - "hotjar.com"
+    - "fullstory.com"
+    - "logrocket.com"
+
+  # Block specific URL path patterns (regex)
+  path_patterns:
+    - ".*/telemetry.*"
+    - ".*/analytics.*"
+    - ".*/tracking.*"
+    - ".*/metrics.*"
+    - ".*/events/track.*"
+    - ".*/collect\\?.*"
+    - ".*/__utm\\..*"
+    - ".*/ping\\?.*"
+    - ".*/heartbeat.*"
+
+# URL rewrites: redirect game launcher requests to our proxy server
+url_rewrites:
+  # Format:
+  #   match: regex pattern to match on full URL
+  #   replace: replacement string (supports backreferences \1, \2, ...)
+  #   target_host: override Host header (optional)
+  rules:
+    # Game CDN / asset delivery
+    - match: "https://cdn\\.game\\.example\\.com/(.*)"
+      replace: "http://our-proxy.local:8090/cdn/\\1"
+      target_host: "our-proxy.local"
+
+    # Launcher update manifest
+    - match: "https://launcher\\.game\\.example\\.com/manifest\\.json"
+      replace: "http://our-proxy.local:8090/manifest.json"
+      target_host: "our-proxy.local"
+
+    # Authentication / login endpoints
+    - match: "https://auth\\.game\\.example\\.com/(.*)"
+      replace: "http://our-proxy.local:8090/auth/\\1"
+      target_host: "our-proxy.local"
+
+    # Patch / update server
+    - match: "https://patch\\.game\\.example\\.com/(.*)"
+      replace: "http://our-proxy.local:8090/patch/\\1"
+      target_host: "our-proxy.local"
+
+    # Game API
+    - match: "https://api\\.game\\.example\\.com/v([0-9]+)/(.*)"
+      replace: "http://our-proxy.local:8090/api/v\\1/\\2"
+      target_host: "our-proxy.local"
+
+# Request header modifications
+header_modifications:
+  remove_request:
+    - "X-Analytics-Id"
+    - "X-Tracking-Id"
+    - "X-Session-Id"
+    - "X-Device-Id"
+    - "X-Fingerprint"
+  remove_response:
+    - "X-Analytics-Token"
+    - "Set-Cookie"  # optionally strip tracking cookies
+
+# Game launch interception
+game_launch:
+  # Intercept launch tokens / session keys and log them
+  capture_launch_token: true
+  token_url_patterns:
+    - ".*/launch.*"
+    - ".*/session.*"
+    - ".*/token.*"
+
+  # Inject custom headers into game launch requests
+  inject_headers:
+    # Example: force a specific game region
+    # "X-Game-Region": "US"
+    # "X-Debug-Mode": "1"
+
+# Logging
+logging:
+  level: "INFO"   # DEBUG | INFO | WARNING | ERROR
+  log_file: "proxy.log"
+  log_blocked: true
+  log_rewrites: true
+  log_headers: false  # set true to log full headers (verbose)
