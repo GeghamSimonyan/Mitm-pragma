@@ -111,6 +111,13 @@ game_launch:
     # "X-Game-Region": "US"
     # "X-Debug-Mode": "1"
 
+# WebSocket support
+# Routing works the same as HTTP: include ?host=wss://... in the WS upgrade URL.
+# The connection is proxied transparently; messages are optionally logged here.
+websocket:
+  log_messages: false          # set true to log individual WS message payloads
+  max_message_log_bytes: 256   # truncate logged message previews to this length
+
 # Logging
 logging:
   level: "INFO"   # DEBUG | INFO | WARNING | ERROR

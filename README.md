@@ -72,19 +72,49 @@ sudo update-ca-certificates
 `launch.sh` automatically sets `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, and
 `NODE_EXTRA_CA_CERTS` when launching the game, so most runtimes pick it up automatically.
 
+## Upstream routing via `?host=`
+
+The proxy reads the upstream target from the **`host` query parameter** on
+every request.  The param is stripped before forwarding; the rest of the URL
+is preserved.
+
+```
+# HTTP
+GET http://proxy:8080/api/login?host=https%3A%2F%2Fgame.example.com&token=abc
+
+# WebSocket upgrade
+GET http://proxy:8080/ws/chat?host=wss%3A%2F%2Fgame.example.com&room=1
+Upgrade: websocket
+```
+
+Both are forwarded to `game.example.com` with the original path and remaining
+query string intact.  If no `host` param is present the request is forwarded
+as-is (useful when chaining behind another proxy).
+
+## WebSocket support
+
+WebSocket connections are routed with the same `?host=` convention on the
+HTTP upgrade request.  After the handshake the WS connection is proxied
+transparently.  Set `websocket.log_messages: true` in `config.yaml` to log
+individual message payloads.
+
 ## Architecture
 
 ```
 Game Launcher
      │
-     ▼  HTTP(S)
+     ▼  HTTP(S) or WS(S)  — with ?host=<upstream> query param
 MITM Proxy (mitmproxy + addon.py)
      │
-     ├── analytics request  ──►  204 No Content  (dropped)
+     ├── 1. extract ?host= → rewrite connection target, strip param
      │
-     ├── game CDN request   ──►  rewritten URL  ──►  our-proxy.local
+     ├── 2. analytics request ──► 204 No Content  (dropped)
      │
-     └── everything else    ──►  upstream as-is
+     ├── 3. scrub tracking headers
+     │
+     ├── 4. static URL-rewrite rules (config.yaml)
+     │
+     └── 5. forward to upstream, preserving path + query
 ```
 
 ## Files
