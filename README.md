@@ -1,127 +1,181 @@
 # MITM Proxy — Game Launcher Interceptor
+**Domain:** `prag.digitain.tools`
 
-Intercepts game launcher traffic to:
-- **Block analytics** (Google Analytics, Firebase, Amplitude, Sentry, etc.)
-- **Rewrite URLs** to route game CDN / API / auth traffic through our own proxy server
-- **Scrub tracking headers** from requests and responses
-- **Capture game launch tokens** for debugging / re-use
+Intercepts game-launcher traffic over HTTPS/WSS to:
+- Route all traffic through `prag.digitain.tools` via the `?host=` convention
+- Block analytics silently (return 204)
+- Apply static URL-rewrite rules to redirect CDN / API / auth endpoints
+- Scrub tracking headers from requests and responses
+- Capture game-launch tokens for debugging
+
+---
 
 ## Quick Start
 
 ```bash
-# 1. Install dependencies
 pip install -r requirements.txt
 
-# 2. Start proxy (interactive TUI)
+# Interactive TUI
 ./launch.sh
 
-# 3. Or start and launch a game at the same time
-./launch.sh --game /path/to/game-launcher
+# Non-interactive (CI / server)
+./launch.sh --dump
 
-# 4. Web UI variant
+# Start proxy and game together
+./launch.sh --game /path/to/launcher
+
+# mitmweb UI at http://127.0.0.1:8081
 ./launch.sh --web
 ```
 
-## Configuration
+Configure the game launcher to use the proxy:
 
-Edit `config.yaml` to customize behavior:
+```
+HTTP_PROXY=http://prag.digitain.tools:8080
+HTTPS_PROXY=http://prag.digitain.tools:8080
+```
+
+---
+
+## Upstream routing — `?host=` parameter
+
+Every request (HTTP or WebSocket upgrade) must carry a `host` query parameter
+that names the real upstream.  The proxy strips it and forwards the request
+preserving the original path and all remaining query params.
+
+```
+# HTTP
+GET /api/login?host=https%3A%2F%2Fgame.example.com&token=abc
+→ https://game.example.com/api/login?token=abc
+
+# WebSocket
+GET /ws/live?host=wss%3A%2F%2Fgame.example.com&room=42
+Upgrade: websocket
+→ wss://game.example.com/ws/live?room=42
+```
+
+---
+
+## SSL / TLS
+
+SSL interception is **on by default**.  mitmproxy generates its own CA on first
+run (`~/.mitmproxy/mitmproxy-ca-cert.pem`).
+
+### Use mitmproxy's auto-generated CA (default)
+
+```bash
+./launch.sh
+# Then trust: ~/.mitmproxy/mitmproxy-ca-cert.pem
+```
+
+Install system-wide on Linux:
+
+```bash
+sudo cp ~/.mitmproxy/mitmproxy-ca-cert.pem \
+    /usr/local/share/ca-certificates/mitmproxy.crt
+sudo update-ca-certificates
+```
+
+### Use a real certificate (Let's Encrypt / custom)
+
+Drop the certificate files into `certs/` — `launch.sh` picks them up automatically:
+
+```
+certs/
+  prag.digitain.tools-fullchain.pem   # full chain (cert + intermediates)
+  prag.digitain.tools.key             # private key
+```
+
+Or pass them explicitly:
+
+```bash
+./launch.sh --cert /path/to/fullchain.pem --key /path/to/key.pem
+```
+
+`launch.sh` automatically sets `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`,
+`NODE_EXTRA_CA_CERTS`, and `JAVA_TOOL_OPTIONS` when launching the game, so
+most runtimes pick up the CA without manual configuration.
+
+---
+
+## Configuration — `config.yaml`
 
 | Section | Purpose |
 |---|---|
-| `proxy` | Listen address/port, upstream chain |
-| `analytics_block.domains` | Domains to silence (return 204) |
-| `analytics_block.path_patterns` | URL path regex patterns to block |
-| `url_rewrites.rules` | Regex-based URL rewriting to our server |
-| `header_modifications` | Headers to strip from requests/responses |
-| `game_launch` | Launch token capture + header injection |
+| `proxy` | Listen address, port, domain, SSL cert/key paths |
+| `analytics_block.domains` | Domains blocked entirely (204 response) |
+| `analytics_block.path_patterns` | URL regex patterns to block |
+| `url_rewrites.rules` | Regex → replacement URL rules (first match wins) |
+| `header_modifications` | Headers to strip from requests / responses |
+| `game_launch` | Token capture + header injection on launch endpoints |
+| `websocket` | WS message logging settings |
+| `logging` | Log level, file, verbosity |
 
-### Adding a URL Rewrite
+### Add a URL rewrite
 
 ```yaml
 url_rewrites:
   rules:
     - match: "https://cdn\\.mygame\\.com/(.*)"
-      replace: "http://our-proxy.local:8090/cdn/\\1"
-      target_host: "our-proxy.local"
+      replace: "https://prag.digitain.tools/cdn/\\1"
+      target_host: "prag.digitain.tools"
 ```
 
-### Blocking an Analytics Endpoint
+### Block an analytics endpoint
 
 ```yaml
 analytics_block:
   domains:
-    - "my-analytics-vendor.com"
+    - "my-vendor.com"
   path_patterns:
     - ".*/track\\?.*"
 ```
 
-## Certificate Setup
+---
 
-On first run mitmproxy generates a CA certificate at `~/.mitmproxy/mitmproxy-ca-cert.pem`.
-Install it as a trusted CA in the OS / game process to decrypt HTTPS traffic.
-
-### Linux (system-wide)
-
-```bash
-sudo cp ~/.mitmproxy/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/mitmproxy.crt
-sudo update-ca-certificates
-```
-
-### Per-process (environment variables)
-
-`launch.sh` automatically sets `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, and
-`NODE_EXTRA_CA_CERTS` when launching the game, so most runtimes pick it up automatically.
-
-## Upstream routing via `?host=`
-
-The proxy reads the upstream target from the **`host` query parameter** on
-every request.  The param is stripped before forwarding; the rest of the URL
-is preserved.
+## Project structure
 
 ```
-# HTTP
-GET http://proxy:8080/api/login?host=https%3A%2F%2Fgame.example.com&token=abc
-
-# WebSocket upgrade
-GET http://proxy:8080/ws/chat?host=wss%3A%2F%2Fgame.example.com&room=1
-Upgrade: websocket
+.
+├── addon.py            # mitmproxy entry point — hook dispatch only
+├── config.yaml         # all configuration
+├── launch.sh           # SSL-aware launcher script
+├── requirements.txt    # mitmproxy + PyYAML
+├── certs/              # drop real TLS certs here (gitignored)
+└── modules/
+    ├── __init__.py     # re-exports all public classes
+    ├── config.py       # Config dataclass, loader, logger factory
+    ├── router.py       # UpstreamRouter — ?host= param extraction
+    ├── analytics.py    # AnalyticsBlocker — domain/path blocking
+    ├── rewriter.py     # UrlRewriter — static regex rewrite rules
+    ├── headers.py      # HeaderScrubber — tracking header removal
+    ├── launch.py       # GameLaunchInterceptor — token capture
+    └── ws.py           # WebSocketHandler — lifecycle logging
 ```
 
-Both are forwarded to `game.example.com` with the original path and remaining
-query string intact.  If no `host` param is present the request is forwarded
-as-is (useful when chaining behind another proxy).
-
-## WebSocket support
-
-WebSocket connections are routed with the same `?host=` convention on the
-HTTP upgrade request.  After the handshake the WS connection is proxied
-transparently.  Set `websocket.log_messages: true` in `config.yaml` to log
-individual message payloads.
+---
 
 ## Architecture
 
 ```
 Game Launcher
      │
-     ▼  HTTP(S) or WS(S)  — with ?host=<upstream> query param
-MITM Proxy (mitmproxy + addon.py)
+     ▼  HTTPS / WSS  (with ?host=<upstream> query param)
      │
-     ├── 1. extract ?host= → rewrite connection target, strip param
+  prag.digitain.tools:8080  (mitmproxy + addon.py)
      │
-     ├── 2. analytics request ──► 204 No Content  (dropped)
+     ├─ modules/router.py    extract ?host=, rewrite target, strip param
      │
-     ├── 3. scrub tracking headers
+     ├─ modules/analytics.py  blocked domain/path? → 204, stop
      │
-     ├── 4. static URL-rewrite rules (config.yaml)
+     ├─ modules/headers.py   strip tracking headers from request
      │
-     └── 5. forward to upstream, preserving path + query
+     ├─ modules/rewriter.py  apply static URL-rewrite rules
+     │
+     ├─ modules/launch.py    game-launch endpoint? inject headers, log token
+     │
+     └─────────────────────► upstream (TLS, verify_upstream=false by default)
+                                │
+                             modules/headers.py  strip tracking headers from response
+                             modules/launch.py   capture launch token from response body
 ```
-
-## Files
-
-| File | Description |
-|---|---|
-| `addon.py` | mitmproxy Python addon (core logic) |
-| `config.yaml` | All configuration |
-| `launch.sh` | Shell launcher script |
-| `requirements.txt` | Python dependencies |

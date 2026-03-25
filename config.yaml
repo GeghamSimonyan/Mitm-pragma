@@ -1,13 +1,33 @@
-# MITM Proxy Configuration for Game Launcher
-# Controls URL rewrites, analytics blocking, and proxy behavior
+# ============================================================
+# MITM Proxy — Game Launcher Configuration
+# Domain: prag.digitain.tools
+# ============================================================
 
 proxy:
   host: "0.0.0.0"
-  port: 8080
-  ssl_insecure: false
-  upstream: null  # Set to "http://upstream-proxy:port" if chaining proxies
+  port: 8080         # plain-HTTP proxy port (clients use CONNECT for HTTPS)
+  domain: "prag.digitain.tools"
 
-# Analytics domains/patterns to block entirely (return 204 No Content)
+  ssl:
+    enabled: true
+
+    # Path to the TLS certificate used for the proxy domain.
+    # Leave null to use mitmproxy's auto-generated CA (see launch.sh).
+    #
+    # For a real cert (e.g. from Let's Encrypt):
+    #   cert: "certs/prag.digitain.tools-fullchain.pem"
+    #   key:  "certs/prag.digitain.tools.key"
+    cert: null
+    key: null
+
+    # Do not verify TLS certificates of upstream servers.
+    # Required when the upstream uses self-signed or expired certs.
+    verify_upstream: false
+
+# ============================================================
+# Analytics blocking — return 204 No Content immediately
+# ============================================================
+
 analytics_block:
   domains:
     - "google-analytics.com"
@@ -34,13 +54,10 @@ analytics_block:
     - "collector.newrelic.com"
     - "bam.nr-data.net"
     - "stats.g.doubleclick.net"
-    - "pagead2.googlesyndication.com"
-    - "adservice.google.com"
     - "hotjar.com"
     - "fullstory.com"
     - "logrocket.com"
 
-  # Block specific URL path patterns (regex)
   path_patterns:
     - ".*/telemetry.*"
     - ".*/analytics.*"
@@ -52,39 +69,45 @@ analytics_block:
     - ".*/ping\\?.*"
     - ".*/heartbeat.*"
 
-# URL rewrites: redirect game launcher requests to our proxy server
+# ============================================================
+# Static URL rewrites
+# Applied AFTER ?host= routing, so `match` runs against the
+# already-resolved upstream URL.
+#
+# Traffic is routed through prag.digitain.tools by default.
+# ============================================================
+
 url_rewrites:
-  # Format:
-  #   match: regex pattern to match on full URL
-  #   replace: replacement string (supports backreferences \1, \2, ...)
-  #   target_host: override Host header (optional)
   rules:
     # Game CDN / asset delivery
     - match: "https://cdn\\.game\\.example\\.com/(.*)"
-      replace: "http://our-proxy.local:8090/cdn/\\1"
-      target_host: "our-proxy.local"
+      replace: "https://prag.digitain.tools/cdn/\\1"
+      target_host: "prag.digitain.tools"
 
     # Launcher update manifest
     - match: "https://launcher\\.game\\.example\\.com/manifest\\.json"
-      replace: "http://our-proxy.local:8090/manifest.json"
-      target_host: "our-proxy.local"
+      replace: "https://prag.digitain.tools/manifest.json"
+      target_host: "prag.digitain.tools"
 
-    # Authentication / login endpoints
+    # Authentication / login
     - match: "https://auth\\.game\\.example\\.com/(.*)"
-      replace: "http://our-proxy.local:8090/auth/\\1"
-      target_host: "our-proxy.local"
+      replace: "https://prag.digitain.tools/auth/\\1"
+      target_host: "prag.digitain.tools"
 
     # Patch / update server
     - match: "https://patch\\.game\\.example\\.com/(.*)"
-      replace: "http://our-proxy.local:8090/patch/\\1"
-      target_host: "our-proxy.local"
+      replace: "https://prag.digitain.tools/patch/\\1"
+      target_host: "prag.digitain.tools"
 
-    # Game API
+    # Versioned game API
     - match: "https://api\\.game\\.example\\.com/v([0-9]+)/(.*)"
-      replace: "http://our-proxy.local:8090/api/v\\1/\\2"
-      target_host: "our-proxy.local"
+      replace: "https://prag.digitain.tools/api/v\\1/\\2"
+      target_host: "prag.digitain.tools"
 
-# Request header modifications
+# ============================================================
+# Header scrubbing
+# ============================================================
+
 header_modifications:
   remove_request:
     - "X-Analytics-Id"
@@ -94,34 +117,37 @@ header_modifications:
     - "X-Fingerprint"
   remove_response:
     - "X-Analytics-Token"
-    - "Set-Cookie"  # optionally strip tracking cookies
 
+# ============================================================
 # Game launch interception
+# ============================================================
+
 game_launch:
-  # Intercept launch tokens / session keys and log them
   capture_launch_token: true
   token_url_patterns:
     - ".*/launch.*"
     - ".*/session.*"
     - ".*/token.*"
+  inject_headers: {}
+    # Uncomment to force region or debug mode:
+    # X-Game-Region: "EU"
+    # X-Debug-Mode: "0"
 
-  # Inject custom headers into game launch requests
-  inject_headers:
-    # Example: force a specific game region
-    # "X-Game-Region": "US"
-    # "X-Debug-Mode": "1"
+# ============================================================
+# WebSocket
+# ============================================================
 
-# WebSocket support
-# Routing works the same as HTTP: include ?host=wss://... in the WS upgrade URL.
-# The connection is proxied transparently; messages are optionally logged here.
 websocket:
-  log_messages: false          # set true to log individual WS message payloads
-  max_message_log_bytes: 256   # truncate logged message previews to this length
+  log_messages: false
+  max_message_log_bytes: 256
 
+# ============================================================
 # Logging
+# ============================================================
+
 logging:
-  level: "INFO"   # DEBUG | INFO | WARNING | ERROR
+  level: "INFO"        # DEBUG | INFO | WARNING | ERROR
   log_file: "proxy.log"
   log_blocked: true
   log_rewrites: true
-  log_headers: false  # set true to log full headers (verbose)
+  log_headers: false
